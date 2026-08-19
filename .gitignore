@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+node_modules/
+.databricks/
+.DS_Store
+# keep frontend/dist for deployment — do NOT ignore it
+frontend/node_modules/
+# Superpowers SDD workspace (scratch: ledger, briefs, reports, screenshots)
+.superpowers/
+# review scratch (diffs handed to review agents)
+.rev/
+
+# Internal planning docs (specs/plans) — not shipped to customers
+docs/superpowers/

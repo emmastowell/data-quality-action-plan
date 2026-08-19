@@ -1,0 +1,131 @@
+bundle:
+  name: dqap-accelerator
+
+# The scheduled job runs as the app service principal, which must be able to
+# READ the bundle's deployed files (they land under the deploying user's
+# workspace folder). This bundle-level permission grants the SP CAN_VIEW, which
+# DABs translates into CAN_READ on the workspace files folder + view on the job.
+# NOTE: setting the job's run_as to this SP also requires the *deploying user*
+# to hold the account-level `servicePrincipal.user` role on it — see docs/DEPLOY.md.
+permissions:
+  - service_principal_name: ${var.app_service_principal}
+    level: CAN_VIEW
+
+variables:
+  catalog:
+    description: Unity Catalog that holds the mirrored metrics schema.
+    default: main
+  metrics_schema:
+    description: Schema (within catalog) for the mirrored app tables.
+    default: dqap
+  warehouse_id:
+    description: >-
+      Serverless SQL warehouse ID used to run measurement_sql. Required — supply
+      your workspace's warehouse, e.g. `databricks bundle deploy --var warehouse_id=<id>`.
+  lakebase_instance:
+    description: Managed Lakebase Database Instance name.
+    default: dqap-accelerator
+  app_service_principal:
+    description: >-
+      Client ID of the app service principal (used for run_as, UC grants, PGUSER).
+      Required — supply your app's SP, e.g. `--var app_service_principal=<client-id>`.
+
+resources:
+  apps:
+    dqap:
+      name: dqap-accelerator
+      source_code_path: ./
+      description: "Data Quality Action Plan accelerator (GOV.UK methodology)"
+  database_instances:
+    dqap_pg:
+      name: ${var.lakebase_instance}
+      capacity: "CU_1"
+  schemas:
+    dqap_metrics:
+      catalog_name: ${var.catalog}
+      name: ${var.metrics_schema}
+      comment: "DQAP accelerator — mirrored app state for monitoring over time"
+      grants:
+        - principal: ${var.app_service_principal}
+          privileges:
+            - USE_SCHEMA
+            - CREATE_TABLE
+  jobs:
+    dqap_measure_refresh:
+      name: dqap-measure-refresh
+      # Runs daily 06:00 Europe/London as the app service principal.
+      # Task 1 refreshes warehouse-SQL measurements into Lakebase; task 2
+      # mirrors every app table into ${var.catalog}.${var.metrics_schema}.
+      run_as:
+        service_principal_name: ${var.app_service_principal}
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?"
+        timezone_id: "Europe/London"
+        pause_status: UNPAUSED
+      tasks:
+        - task_key: run_measures
+          spark_python_task:
+            python_file: ./jobs/run_measures.py
+            parameters:
+              - "--warehouse-id"
+              - "${var.warehouse_id}"
+              - "--lakebase-instance"
+              - "${var.lakebase_instance}"
+              - "--pguser"
+              - "${var.app_service_principal}"
+          environment_key: default
+        - task_key: sync_to_uc
+          depends_on:
+            - task_key: run_measures
+          spark_python_task:
+            python_file: ./jobs/sync_to_uc.py
+            parameters:
+              - "--catalog"
+              - "${var.catalog}"
+              - "--schema"
+              - "${var.metrics_schema}"
+              - "--lakebase-instance"
+              - "${var.lakebase_instance}"
+              - "--pguser"
+              - "${var.app_service_principal}"
+          environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            client: "1"
+            # Both job tasks import server.db (and, transitively, the app's
+            # provider/error modules). The serverless base image does NOT provide
+            # these, so declare every import the tasks pull in:
+            dependencies:
+              # Pin >=0.125.0 (matches requirements.txt): the serverless base
+              # image ships an OLDER databricks-sdk that satisfies an unpinned
+              # requirement but lacks w.database (the Lakebase API server/db.py uses).
+              - databricks-sdk>=0.125.0
+              # psycopg_pool is imported at server/db.py top level — needs the
+              # `pool` extra, NOT just `binary`, or the tasks crash at import.
+              - psycopg[binary,pool]
+              # run_measures -> server.providers.warehouse -> server.errors imports
+              # fastapi (AppError uses fastapi Request/JSONResponse). Brings
+              # pydantic/starlette transitively.
+              - fastapi
+
+targets:
+  # Prefix-free deploy target: with no `mode`, DABs does NOT prefix resource
+  # names and it honours the resource-level `schedule.pause_status: UNPAUSED`,
+  # so the deployed names are exactly `dqap-accelerator` / `dqap` /
+  # `dqap-measure-refresh` and the job is live on its schedule. This is the
+  # target a customer deploys. (For throwaway iteration you can add a separate
+  # target with `mode: development`, which prefixes names and forces schedules
+  # PAUSED.)
+  #
+  # NOTE for a workspace where the app / Lakebase instance already exist but were
+  # NOT created by this bundle (e.g. bootstrapped out-of-band): `bundle deploy`
+  # will try to CREATE them and conflict. Either adopt them into bundle state
+  # with `databricks bundle deployment bind <resource> <existing-id>`, or deploy
+  # the app separately (`databricks apps deploy`) and let the bundle manage only
+  # the schema + job. A first-time customer with an empty workspace has neither
+  # problem — one `databricks bundle deploy` creates everything.
+  default:
+    default: true
+    workspace:
+      profile: ${DATABRICKS_PROFILE}   # e.g. the fevm-uk-pubsec-demo profile

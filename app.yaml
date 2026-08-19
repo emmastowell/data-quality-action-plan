@@ -1,0 +1,29 @@
+command:
+  - "python"
+  - "-m"
+  - "uvicorn"
+  - "app:app"
+  - "--host"
+  - "0.0.0.0"
+  - "--port"
+  - "8000"
+
+env:
+  # Managed Lakebase Database Instance to mint OAuth credentials against.
+  # PGHOST / PGUSER / PGPORT / PGDATABASE / PGSSLMODE are auto-injected by the
+  # attached Database (Lakebase) app resource.
+  - name: LAKEBASE_INSTANCE_NAME
+    value: 'dqap-accelerator'
+  - name: ASSESSMENT_PROVIDER
+    value: 'manual'
+  - name: RUN_SETUP_ON_START
+    value: 'true'      # set false after first successful boot
+  - name: SEED_ON_START
+    value: 'true'      # set false to start empty / after first seed
+  # Databricks SQL warehouse used to execute measurement_sql queries.
+  # Set this to your workspace's Serverless SQL warehouse ID. The app service
+  # principal must have CAN_USE on this warehouse and SELECT on any tables
+  # referenced by measurement_sql statements. Leave blank to disable SQL-based
+  # measures (manual assessment still works).
+  - name: WAREHOUSE_ID
+    value: ''

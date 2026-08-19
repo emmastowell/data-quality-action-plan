@@ -1,0 +1,10 @@
+# This file mirrors the dependencies declared in pyproject.toml [project.dependencies]
+# and exists because the uv wheel build timed out on Databricks Apps, so the app
+# falls back to a pip install from this file.
+# KEEP IN SYNC with pyproject.toml (or regenerate with: uv export --no-hashes > requirements.txt).
+databricks-sdk>=0.125.0
+fastapi>=0.141.1
+psycopg[binary,pool]>=3.3.4
+pydantic>=2.13.4
+python-multipart>=0.0.32
+uvicorn[standard]>=0.52.1
