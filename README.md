@@ -44,14 +44,11 @@ Rules are tagged to one of these government-standard dimensions:
 
 The accelerator is designed to be deployed by any customer with one command. See **[`docs/DEPLOY.md`](docs/DEPLOY.md)** for the complete runbook (prerequisites, variable reference, service-principal setup, and scheduled-job configuration).
 
+> The repo ships a **prebuilt `frontend/dist`**, so you can deploy as-is — no frontend build required. Only rebuild (`cd frontend && npm run build`) if you change the frontend.
+
 ### Quick summary
 
-1. **Build the frontend:**
-   ```bash
-   cd frontend && npm run build && cd ..
-   ```
-
-2. **Deploy with `databricks bundle deploy`**, supplying the bundle variables for your environment:
+1. **Deploy with `databricks bundle deploy`**, supplying the bundle variables for your environment:
    ```bash
    databricks bundle deploy \
      --var catalog=my_catalog \
@@ -62,7 +59,7 @@ The accelerator is designed to be deployed by any customer with one command. See
    ```
    The bundle creates the app, Lakebase instance, UC schema (with `USE_SCHEMA`/`CREATE_TABLE` grants), and the daily monitoring job. `warehouse_id` and `app_service_principal` are required — supply your own.
 
-3. **One manual Postgres grant** — once, as the Lakebase instance admin:
+2. **One manual Postgres grant** — once, as the Lakebase instance admin:
    ```sql
    GRANT USAGE, CREATE ON SCHEMA public TO "<app-sp-client-id>";
    GRANT ALL ON ALL TABLES IN SCHEMA public TO "<app-sp-client-id>";
@@ -70,7 +67,7 @@ The accelerator is designed to be deployed by any customer with one command. See
    ```
    This is a Postgres-internal grant that no bundle resource can express. The UC schema grants are handled by the bundle automatically.
 
-4. **First boot** — the app self-installs its tables and seeds the UK Ship Register example. Set `RUN_SETUP_ON_START=false` and `SEED_ON_START=false` in `app.yaml` after first boot, then redeploy.
+3. **First boot** — the app self-installs its tables and seeds the UK Ship Register example. Set `RUN_SETUP_ON_START=false` and `SEED_ON_START=false` in `app.yaml` after first boot, then redeploy.
 
 ## Resetting for a New Organisation
 

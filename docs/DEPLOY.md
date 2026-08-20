@@ -9,7 +9,7 @@ This runbook takes you from a fresh clone to a fully running DQAP instance with 
 ### Tooling
 
 - **Databricks CLI ≥ 0.240** — `databricks --version` to check. Install via [Databricks CLI docs](https://docs.databricks.com/dev-tools/cli/databricks-cli.html).
-- **Node.js 18+** — to build the React frontend before deploying.
+- **Node.js 18+** — _only_ if you modify the frontend. The repo ships a prebuilt `frontend/dist`, so deploying as-is needs no Node/build step.
 - **uv** — to manage Python deps locally if you need to run tests.
 
 ### Workspace requirements
@@ -62,11 +62,9 @@ The bundle is parameterised by five variables. All have defaults you can overrid
 
 ### Full deploy command with overrides
 
-Build the frontend first, then deploy:
+The frontend is prebuilt in `frontend/dist`, so deploy directly (only run `cd frontend && npm run build` first if you changed the frontend):
 
 ```bash
-cd frontend && npm run build && cd ..
-
 databricks bundle deploy \
   --var catalog=my_catalog \
   --var metrics_schema=dqap \
