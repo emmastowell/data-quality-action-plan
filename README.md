@@ -42,32 +42,38 @@ Rules are tagged to one of these government-standard dimensions:
 
 ## Deploying to Databricks
 
-The accelerator is designed to be deployed by any customer with one command. See **[`docs/DEPLOY.md`](docs/DEPLOY.md)** for the complete runbook (prerequisites, variable reference, service-principal setup, and scheduled-job configuration).
+The accelerator deploys in **two passes** — because a Databricks App's service principal is created *with* the app, so you can't supply it up front. See **[`docs/DEPLOY.md`](docs/DEPLOY.md)** for the complete runbook.
 
 > The repo ships a **prebuilt `frontend/dist`**, so you can deploy as-is — no frontend build required. Only rebuild (`cd frontend && npm run build`) if you change the frontend.
 
 ### Quick summary
 
-1. **Deploy with `databricks bundle deploy`**, supplying the bundle variables for your environment:
+1. **Create the app** (Databricks mints its service principal automatically) and read the SP's client ID:
    ```bash
-   databricks bundle deploy \
-     --var catalog=my_catalog \
-     --var metrics_schema=dqap \
-     --var warehouse_id=<your-warehouse-id> \
-     --var lakebase_instance=<your-instance> \
-     --var app_service_principal=<your-sp-client-id>
+   databricks apps create dqap-accelerator
+   databricks apps get dqap-accelerator | grep service_principal
    ```
-   The bundle creates the app, Lakebase instance, UC schema (with `USE_SCHEMA`/`CREATE_TABLE` grants), and the daily monitoring job. `warehouse_id` and `app_service_principal` are required — supply your own.
 
-2. **One manual Postgres grant** — once, as the Lakebase instance admin:
+2. **Grant that SP its Postgres role** — once, as the Lakebase instance admin:
    ```sql
    GRANT USAGE, CREATE ON SCHEMA public TO "<app-sp-client-id>";
    GRANT ALL ON ALL TABLES IN SCHEMA public TO "<app-sp-client-id>";
    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "<app-sp-client-id>";
    ```
-   This is a Postgres-internal grant that no bundle resource can express. The UC schema grants are handled by the bundle automatically.
+   This is a Postgres-internal grant that no bundle resource can express. The UC schema grant is handled by the bundle automatically.
 
-3. **First boot** — the app self-installs its tables and seeds the UK Ship Register example. Set `RUN_SETUP_ON_START=false` and `SEED_ON_START=false` in `app.yaml` after first boot, then redeploy.
+3. **Deploy the rest**, bound to that SP — this deploys the app code and provisions the Lakebase instance, the UC metrics schema (+grant), and the daily monitoring job:
+   ```bash
+   databricks bundle deploy \
+     --var app_service_principal=<sp-client-id-from-step-1> \
+     --var warehouse_id=<your-warehouse-id> \
+     --var catalog=<your-catalog> \
+     --var metrics_schema=dqap \
+     --var lakebase_instance=dqap-accelerator
+   ```
+   `catalog` and `metrics_schema` default to `main`/`dqap` if omitted; `warehouse_id` and `app_service_principal` are required.
+
+4. **First boot** — the app self-installs its tables and seeds the UK Ship Register example. Set `RUN_SETUP_ON_START=false` and `SEED_ON_START=false` in `app.yaml` after first boot, then redeploy.
 
 ## Resetting for a New Organisation
 

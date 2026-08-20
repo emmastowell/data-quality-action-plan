@@ -1,6 +1,6 @@
 # DQAP Accelerator — Customer Deploy Runbook
 
-This runbook takes you from a fresh clone to a fully running DQAP instance with scheduled daily monitoring in one `databricks bundle deploy` command plus a single documented Postgres grant.
+This runbook takes you from a fresh clone to a fully running DQAP instance with scheduled daily monitoring. Deployment is a **two-pass** flow (see §4): create the app so Databricks mints its service principal, then deploy the rest bound to that SP — plus a single documented Postgres grant.
 
 ---
 
@@ -21,7 +21,7 @@ Your Databricks workspace must have:
 | Unity Catalog enabled | The bundle creates a schema and grants in UC |
 | A managed **Lakebase Database Instance** | The app and the daily job both connect via Lakebase OAuth. The bundle will create one if it does not exist. |
 | A **Serverless SQL warehouse** | Used to execute `measurement_sql` queries on rules. Supply it with `--var warehouse_id=<id>` (a Serverless Starter Warehouse is a good choice). |
-| An **app service principal** | The SP that owns the app process, runs the daily job, and holds the Lakebase Postgres role. |
+| An **app service principal** | **Auto-created by Databricks when the app is created** (§4, pass 1) — you don't pre-create it. It owns the app process, runs the daily job, and holds the Lakebase Postgres role. |
 
 ### Service principal permissions
 
@@ -50,7 +50,7 @@ databricks account access-control update-rule-set --json @rule-set.json -p acct
 
 ## 2. Configure — the five bundle variables
 
-The bundle is parameterised by five variables. All have defaults you can override either with `--var` on the CLI or a `targets.<target>.variables` block in `databricks.yml`.
+The bundle is parameterised by five variables, set with `--var` on the CLI or a `targets.<target>.variables` block in `databricks.yml`. Most have sensible defaults; `warehouse_id` and `app_service_principal` are required (you supply your own — and `app_service_principal` is obtained in §4 pass 1, since the app's SP is created with the app).
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -58,22 +58,9 @@ The bundle is parameterised by five variables. All have defaults you can overrid
 | `metrics_schema` | `dqap` | Schema (within catalog) for the mirrored app tables |
 | `warehouse_id` | _(required)_ | SQL warehouse used to run `measurement_sql` — supply your own |
 | `lakebase_instance` | `dqap-accelerator` | Managed Lakebase Database Instance name |
-| `app_service_principal` | _(required)_ | Client ID of your app's service principal (run_as, grants, PGUSER) |
+| `app_service_principal` | _(required)_ | Client ID of the app's **auto-created** SP — obtained in §4 pass 1 (run_as, grants, PGUSER) |
 
-### Full deploy command with overrides
-
-The frontend is prebuilt in `frontend/dist`, so deploy directly (only run `cd frontend && npm run build` first if you changed the frontend):
-
-```bash
-databricks bundle deploy \
-  --var catalog=my_catalog \
-  --var metrics_schema=dqap \
-  --var warehouse_id=<your-warehouse-id> \
-  --var lakebase_instance=<your-instance-name> \
-  --var app_service_principal=<your-sp-client-id>
-```
-
-> To use a named workspace profile: add `-p <profile>` or set `DATABRICKS_PROFILE=<profile>` in the environment.
+The full deploy command lives in **§4 (Deploy)** because `app_service_principal` isn't known until the app is created. The frontend is prebuilt in `frontend/dist`, so no build step is needed (only run `cd frontend && npm run build` first if you changed the frontend). To use a named workspace profile, add `-p <profile>` or set `DATABRICKS_PROFILE=<profile>`.
 
 ### Alternative: override in `databricks.yml`
 
@@ -129,26 +116,51 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "<app-sp-client
 
 > The SP client ID is the UUID value of `app_service_principal`. To confirm the client ID used by the running app: `databricks apps get dqap-accelerator | grep service_principal`.
 
-**Timing:** Apply this grant before or immediately after the first `databricks bundle deploy`. If the first boot fails with *permission denied for schema public*, apply the grant and redeploy — a stop/start alone is not sufficient because bootstrap only runs on deploy.
+**Timing:** Apply this grant between pass 1 and pass 2 (§4). If the app's first boot fails with *permission denied for schema public*, apply the grant and redeploy — a stop/start alone is not sufficient because bootstrap only runs on deploy.
 
 ---
 
-## 4. Deploy
+## 4. Deploy (two passes)
 
-Once the frontend is built and the five variables are set (and the Postgres grant is in place), one command does everything:
+A Databricks App's **service principal is created together with the app** — you don't pre-create it, and its client ID doesn't exist until the app does. Because the daily job's `run_as` and the UC schema grant target that SP, deploy in two passes.
+
+### Pass 1 — create the app (mints its service principal)
 
 ```bash
-databricks bundle deploy
+databricks apps create dqap-accelerator
 ```
 
-What the bundle creates:
+Then read the auto-created SP's client ID — this is your `app_service_principal` for pass 2:
+
+```bash
+databricks apps get dqap-accelerator | grep service_principal
+```
+
+### Grant the SP its Postgres role
+
+Apply the one-time Lakebase grant from **§3** using that client ID (and the deploying-user `servicePrincipal.user` role from **§1**, which also applies to this SP).
+
+### Pass 2 — deploy everything, bound to the SP
+
+```bash
+databricks bundle deploy \
+  --var app_service_principal=<client-id-from-pass-1> \
+  --var warehouse_id=<your-warehouse-id> \
+  --var catalog=<your-catalog> \
+  --var metrics_schema=dqap \
+  --var lakebase_instance=dqap-accelerator
+```
+
+This deploys the app code and provisions the rest, all bound to the app SP:
 
 | Resource | Name | Notes |
 |---|---|---|
-| Databricks App | `dqap-accelerator` | FastAPI + React GOV.UK app |
+| Databricks App | `dqap-accelerator` | Created in pass 1; pass 2 deploys the code |
 | Lakebase Database Instance | `<lakebase_instance>` | CU_1 managed Postgres; created if absent |
-| UC Schema | `<catalog>.<metrics_schema>` | With `USE_SCHEMA` and `CREATE_TABLE` granted to the app SP |
-| Daily Job | `dqap-measure-refresh` | Two tasks, unpaused, 06:00 Europe/London |
+| UC Schema | `<catalog>.<metrics_schema>` | `USE_SCHEMA` + `CREATE_TABLE` granted to the app SP |
+| Daily Job | `dqap-measure-refresh` | Two tasks, unpaused, 06:00 Europe/London, `run_as` the app SP |
+
+> If pass 2 reports the app already exists (it was created in pass 1), deploy the app code with `databricks apps deploy dqap-accelerator --source-code-path <synced path>` and let the bundle manage the schema + job.
 
 ---
 
